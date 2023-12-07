@@ -1,36 +1,28 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import List
 import datetime
-import pandas
+import math
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import os
+import pandas as pd
 import sqlite3
+import time
 import uvicorn
-from make_master_trajectory import ObjProp
 
 
-app = FastAPI()
+# app = FastAPI()
 
-
-# NOTE コンテキストマネージャを活用してデータベース接続を管理
-class DatabaseMaster:
-    def __init__(self):
-        self.conn = sqlite3.connect('mst_obj_trajectory.db', check_same_thread=False)
-        self.cursor = self.conn.cursor()
-
-    def __enter__(self):
-        return self.cursor
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        try:
-            self.conn.commit()
-        finally:
-            self.conn.rollback()
-            self.conn.close()
+# pandas表示オプションの変更
+# pd.set_option('display.max_rows', None)  # 行数を制限せず全て表示
+# pd.set_option('display.max_columns', None)  # 列数を制限せず全て表示
 
 
 # コンテキストマネージャを活用してデータベース接続を管理
 class DatabaseTransaction:
-    def __init__(self):
-        self.conn = sqlite3.connect('trn_obj_trajectory.db', check_same_thread=False)
+    def __init__(self, dbname_trn: str):
+        self.conn = sqlite3.connect(f"./db/{dbname_trn}", check_same_thread=False)
         self.cursor = self.conn.cursor()
 
     def __enter__(self):
@@ -39,116 +31,193 @@ class DatabaseTransaction:
     def __exit__(self, exc_type, exc_value, traceback):
         try:
             self.conn.commit()
-        finally:
+        except:
             self.conn.rollback()
+        finally:
             self.conn.close()
 
 
-# 物体位置情報テーブルの作成
-def create_database_transaction() -> None:
-    with DatabaseTransaction() as cursor:
+# 実績書き込み用 テーブル作成
+def create_database_transaction(dbname_trn: str) -> None:
+    with DatabaseTransaction(dbname_trn) as cursor:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS trn_obj_trajectory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT not null UNIQUE,
+                obj_id INTEGER not null,
                 obj_name TEXT not null,
                 priority_no INTEGER not null,
-                x_cordinate  REAL not null,
-                y_cordinate  REAL not null
+                group_no INTEGER not null,
+                barrier_range REAL not null,
+                step INTEGER not null,
+                x_position  REAL not null,
+                y_position  REAL not null,
+                present_location INTEGER not null
             )
         ''')
 
 
-# pydanticモデルを使用してリクエストボディの検証
-class UpdateMaster(BaseModel):
-    created_at: datetime.datetime
-    obj_name: str
-    priority_no: int
-    x_cordinate: float
-    y_cordinate: float
+# マスタDBから情報取得
+def read_sqlite(dbname_mst: str) -> pd.DataFrame:
+    file_sqlite3 = f"./db/{dbname_mst}"
+    conn = sqlite3.connect(file_sqlite3)
 
-
-# pydanticモデルを使用してリクエストボディの検証
-class UpdateTransaction(BaseModel):
-    created_at: datetime.datetime
-    obj_name: str
-    priority_no: int
-    x_cordinate: float
-    y_cordinate: float
-
-
-# FastAPIのエンドポイント（非同期化）
-@app.get("/update_master/")
-def make_master():
-    try:
-        obj_A = ObjProp(id=1, name='obj_A', center=(0, 0), radius=2, splits=100, priority_no=1, group_no=1)
-        obj_B = ObjProp(id=2, name='obj_B', center=(1, 1), radius=1, splits=100, priority_no=2, group_no=1)
-
-        mst_trj_A = obj_A.make_trajectory()
-        mst_trj_B = obj_B.make_trajectory()
-
-        with DatabaseMaster() as db:
-            # 位置情報をデータベースに挿入
-            db.execute(
-                """
-                INSERT INTO mst_obj_trajectory (
+    str_query = '''
+                SELECT
                     obj_id,
                     obj_name,
                     x_center,
                     y_center,
                     radius,
-                    splits,
                     priority_no,
                     group_no,
+                    barrier_range,
                     step,
-                    x_trajectory,
-                    y_trajectory)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (mst_trj_A.obj_id,
-                 mst_trj_A.obj_name,
-                 mst_trj_A.x_center,
-                 mst_trj_A.y_center,
-                 mst_trj_A.radius,
-                 mst_trj_A.splits,
-                 mst_trj_A.priority_no,
-                 mst_trj_A.group_no,
-                 mst_trj_A.step,
-                 mst_trj_A.x_trajectory,
-                 mst_trj_A.y_trajectory)
-            )
+                    x_position,
+                    y_position
+                FROM 'mst_obj_trajectory.db'
+                ORDER BY obj_id, step;
+                '''
 
-        return {"message": "Master updated successfully"}
+    df_from_mst = pd.read_sql_query(str_query, conn)
+    conn.close()
+    # print(df_from_mst)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    df_current_flg = pd.DataFrame({
+                                    'current_flg':[pd.NA],
+                                    'created_at':pd.NaT
+                                    },
+                                  )
+    df_concat = pd.concat([df_from_mst,df_current_flg], axis=1)
+    # print(df_concat.info())
+    df_pre = df_concat.fillna({
+                    'current_flg':0,
+                    })
+
+    # 特定の条件を持つ行の フラグ、datetime 値を更新
+    condition = df_pre['step'] == 0
+    # 使い方：loc[行,列]
+    df_pre.loc[condition, 'current_flg'] = 1
+    df_pre.loc[condition, 'created_at'] = datetime.datetime.now()
+    # print(df_pre)
+    # print(df_pre.info())
+    return df_pre
 
 
-# FastAPIのエンドポイント（非同期化）
-@app.post("/update_transaction/")
-async def update_position(position: UpdateTransaction):
-    try:
-        with DatabaseTransaction() as db:
-            # 位置情報をデータベースに挿入
-            db.execute(
-                """
-                INSERT INTO trn_obj_trajectory (created_at, obj_name, priority_no, x_cordinate, y_cordinate)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (position.created_at, position.obj_name, position.priority_no, position.x_cordinate, position.y_cordinate)
-            )
+# NOTE ビジネスロジック
+def analysis(df_pre: pd.DataFrame) -> pd.DataFrame:
+    # ループ処理
+    for step in range(200):
+        # 処理日時分秒取得
+        nowt = datetime.datetime.now()
+        df_1 = df_pre.query('obj_id==1 & step==0')
+        df_2 = df_pre.query('obj_id==2 & step==0')
+        barrier_range = df_1['barrier_range'].values[0] + df_2['barrier_range'].values[0]
+        x_diff = df_2['x_position'].values[0] - df_1['x_position'].values[0]
+        # print(x_diff)
+        y_diff = df_2['y_position'].values[0] - df_1['y_position'].values[0]
+        # print(y_diff)
+        distance_obj = math.sqrt((x_diff)**2 + (y_diff)**2)
+        # print(distance_obj)
+        condition_stp = ( df_pre['step'] == step )
+        condition_stp_nxt = ( df_pre['step'] == step +1 )
+        if barrier_range < distance_obj:
+            df_pre.loc[condition_stp, 'current_flg'] = 0
+            df_pre.loc[condition_stp_nxt, 'current_flg'] = 1
+            df_pre.loc[condition_stp_nxt, 'created_at'] = nowt
+        else:
+            step2 = step + 1
+            if step2 >= 100:
+                break
+            else:
+                if df_1['priority_no'].values[0] < df_2['priority_no'].values[0]:
+                    df_1 = df_pre.query(f'obj_id==1 & step=={step2}')
+                    x_diff = df_2['x_position'].values[0] - df_1['x_position'].values[0]
+                    # print(x_diff)
+                    y_diff = df_2['y_position'].values[0] - df_1['y_position'].values[0]
+                    # print(y_diff)
+                    distance_obj = math.sqrt((x_diff)**2 + (y_diff)**2)
+                    # print(distance_obj)
+                    if (barrier_range / distance_obj) < 2:
+                        condition_pno = ( df_pre['priority_no'] == min(df_1['priority_no'].values[0] , df_2['priority_no'].values[0]) )
+                        df_pre.loc[condition_pno & condition_stp, 'current_flg'] = 0
+                        df_pre.loc[condition_pno & condition_stp_nxt, 'current_flg'] = 1
+                        df_pre.loc[condition_pno & condition_stp_nxt, 'created_at'] = nowt
+                    else:
+                        condition_pno = ( df_pre['priority_no'] == max(df_1['priority_no'].values[0] , df_2['priority_no'].values[0]) )
+                        df_pre.loc[condition_pno & condition_stp, 'current_flg'] = 0
+                        df_pre.loc[condition_pno & condition_stp_nxt, 'current_flg'] = 1
+                        df_pre.loc[condition_pno & condition_stp_nxt, 'created_at'] = nowt
+                else:
+                    df_2 = df_pre.query(f'obj_id==2 & step=={step2}')
+                    x_diff = df_2['x_position'].values[0] - df_1['x_position'].values[0]
+                    y_diff = df_2['y_position'].values[0] - df_1['y_position'].values[0]
+                    distance_obj = math.sqrt((x_diff)**2 + (y_diff)**2)
+                    if (barrier_range / distance_obj) < 2:
+                        condition_pno = ( df_pre['priority_no'] == min(df_1['priority_no'].values[0] , df_2['priority_no'].values[0]) )
+                        df_pre.loc[condition_pno & condition_stp, 'current_flg'] = 0
+                        df_pre.loc[condition_pno & condition_stp_nxt, 'current_flg'] = 1
+                        df_pre.loc[condition_pno & condition_stp_nxt, 'created_at'] = nowt
+                    else:
+                        condition_pno = ( df_pre['priority_no'] == max(df_1['priority_no'].values[0] , df_2['priority_no'].values[0]) )
+                        df_pre.loc[condition_pno & condition_stp, 'current_flg'] = 0
+                        df_pre.loc[condition_pno & condition_stp_nxt, 'current_flg'] = 1
+                        df_pre.loc[condition_pno & condition_stp_nxt, 'created_at'] = nowt
+        time.sleep(0.1)
+    return df_pre
 
-        return {"message": "Transaction updated successfully"}
 
-    except Exception as e:
-        db.conn.rollback()
-        db.conn.close()
-        raise HTTPException(status_code=500, detail=str(e))
+def animation(df_trn):
+    # NaTレコード削除
+    df_trn.dropna(inplace=True)
+    print(df_trn)
+    # プロット初期化
+    fig, ax = plt.subplots()
+    line, = ax.plot([], [], marker='o')
+
+    # プロット更新関数
+    def update(data):
+        x = df_trn['x_position'].iloc[:]
+        y = df_trn['y_position'].iloc[:]
+        line.set_data(x, y)
+        return line
+
+    # アニメーション作成
+    animation = FuncAnimation(fig, update, interval=100)
+
+    plt.show()
 
 
 if __name__ == "__main__":
-    # NOTE 起動時にデータベース作成チェックが必要
-    create_database_transaction()
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+    # 前処理1
+    # NOTE 実行前に前回の実績DBを削除
+    name_trn_db = "trn_obj_trajectory.db"
+    if os.path.isfile(f"./db/{name_trn_db}"):
+        os.remove(f"./db/{name_trn_db}")
+    else:pass
+    # NOTE 実績DB新規作成
+    create_database_transaction(name_trn_db)
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+
+
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+    # 前処理2
+    # NOTE マスタDBを取得＋加工して用意する。これで準備完了。本番処理へ。
+    name_mst_db = "mst_obj_trajectory.db"
+    df_pre = read_sqlite(name_mst_db)
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+
+
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+    # 本番処理
+    # NOTE ビジネスロジック。
+    df_trn = analysis(df_pre)
+    print(df_trn)
+    # NOTE アニメーション表示。
+    animation(df_trn)
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+
 
     # NOTE 絶対パスを渡さないとリロードができない
-    uvicorn.run("poc_simulate:app", host='127.0.0.1', port=8000, reload=True)
+    # uvicorn.run("poc_simulate:app", host='127.0.0.1', port=8000, reload=True)
