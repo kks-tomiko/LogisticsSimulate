@@ -6,17 +6,19 @@
         "y_center": 0,
         "radius": 2,
         "splits": 100,
+        "cycles": 1,
         "priority_no": 1,
         "group_no": 1,
-        "barrier_range": 3
+        "barrier_range": 1
     },
     "object2":{
         "id": 2,
         "name":"obj_B",
-        "x_center": 0,
+        "x_center": 2,
         "y_center": 0,
         "radius": 1,
         "splits": 100,
+        "cycles": 2,
         "priority_no": 2,
         "group_no": 1,
         "barrier_range": 2

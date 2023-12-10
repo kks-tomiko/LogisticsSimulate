@@ -15,7 +15,7 @@ import uvicorn
 # app = FastAPI()
 
 # pandas表示オプションの変更
-# pd.set_option('display.max_rows', None)  # 行数を制限せず全て表示
+pd.set_option('display.max_rows', None)  # 行数を制限せず全て表示
 # pd.set_option('display.max_columns', None)  # 列数を制限せず全て表示
 
 
@@ -168,24 +168,63 @@ def analysis(df_pre: pd.DataFrame) -> pd.DataFrame:
 
 
 def animation(df_trn):
+    # NaTレコード削除前
+    # print(df_trn)
     # NaTレコード削除
     df_trn.dropna(inplace=True)
     print(df_trn)
+
+    # NOTE 描画のためにデータフレームをオブジェクトごとに分解
+    list_df_trn: List[pd.DataFrame] = []
+
+    for df_i in df_trn['obj_id'].unique():
+        df = df_trn.query(f'obj_id=={df_i}')
+        print(df)
+        list_df_trn.append(df)
+
+    print(list_df_trn)
+
     # プロット初期化
-    fig, ax = plt.subplots()
-    line, = ax.plot([], [], marker='o')
+    figure, ax = plt.subplots()
+    # plotのLine2Dobjectは、戻り値がリスト型となる。
+    lines = ax.plot([], [], marker='o', label='Object 1')
+    lines += ax.plot([], [], marker='s', label='Object 2')
+
+    plt.xlim(-3, 5)
+    plt.ylim(-3, 3)
 
     # プロット更新関数
-    def update(data):
-        x = df_trn['x_position'].iloc[:]
-        y = df_trn['y_position'].iloc[:]
-        line.set_data(x, y)
-        return line
+    def update(frame):
+        # 時間軸をどうやってデータフレームで抽出するか？これが解決できればいけそう。
+        print(f"frame:{frame}")
+        x1 = df_trn.query(f'obj_id==1 & created_at<{frame}').loc[:, 'x_position']
+        y1 = df_trn.query('obj_id==1').loc[:frame, 'y_position']
+        x2 = df_trn.query('obj_id==2').loc[:frame, 'x_position']
+        y2 = df_trn.query('obj_id==2').loc[:frame, 'y_position']
+        print("■■■■■■■■■■■■■■■■■■■■■■■■■■■■")
+        print(f"x1:{x1}")
+        print("■■■■■■■■■■■■■■■■■■■■■■■■■■■■")
+        print(f"y1:{y1}")
+        print("■■■■■■■■■■■■■■■■■■■■■■■■■■■■")
+        print(f"x2:{x2}")
+        print("■■■■■■■■■■■■■■■■■■■■■■■■■■■■")
+        print(f"y2:{y2}")
+        print("■■■■■■■■■■■■■■■■■■■■■■■■■■■■")
+        print(f"frame:{frame}")
+        lines[0].set_data(x1,y1)
+        lines[1].set_data(x2,y2)
+        return lines
 
     # アニメーション作成
-    animation = FuncAnimation(fig, update, interval=100)
+    # framesはINTEGERを受け付ける。len(df_trn)でもよいが、指定したカラムでもソート可能。
+    animation = FuncAnimation(fig=figure, func=update, frames=df['created_at'].unique(), interval=1000)
 
+    # 凡例の表示
+    ax.legend()
+
+    animation.save("test.gif")
     plt.show()
+    plt.close()
 
 
 if __name__ == "__main__":
@@ -213,7 +252,7 @@ if __name__ == "__main__":
     # 本番処理
     # NOTE ビジネスロジック。
     df_trn = analysis(df_pre)
-    print(df_trn)
+    # print(df_trn)
     # NOTE アニメーション表示。
     animation(df_trn)
     # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■

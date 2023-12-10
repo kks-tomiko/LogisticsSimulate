@@ -15,6 +15,7 @@ class ObjProp:
         self.y_center = value["y_center"]
         self.radius = value["radius"]
         self.splits = value["splits"]
+        self.cycles = value["cycles"]
         self.priority_no = value["priority_no"]
         self.group_no = value["group_no"]
         self.barrier_range = value["barrier_range"]
@@ -25,7 +26,8 @@ class ObjProp:
 
     # 軌跡記録
     def make_trajectory(self):
-        thetas = np.linspace(0, 2*np.pi, self.splits)
+        # 円運動の軌跡を記録
+        thetas = np.linspace(0, 2*self.cycles*np.pi, self.splits)
         for index, theta in enumerate(thetas):
             self.step.append(index)
             self.x_position.append(self.x_center + np.cos(self.radius*theta))
@@ -37,6 +39,7 @@ class ObjProp:
                       self.y_center,
                       self.radius,
                       self.splits,
+                      self.cycles,
                       self.priority_no,
                       self.group_no,
                       self.barrier_range,
@@ -48,14 +51,16 @@ class ObjProp:
                     "y_center",
                     "radius",
                     "splits",
+                    "cycles",
                     "priority_no",
                     "group_no",
                     "barrier_range",
                     ]
         # pandas:物体の軌跡情報
         # NOTE 縦持ちでデータフレーム作成するおまじない
-        list_pre2 = zip(self.step, self.x_position, self.y_position)
+        list_pre2 = zip(thetas, self.step, self.x_position, self.y_position)
         columns2 = [
+                    "thetas",
                     "step",
                     "x_position",
                     "y_position",
