@@ -15,7 +15,7 @@ import uvicorn
 # app = FastAPI()
 
 # NOTE pandas表示オプションの変更
-# pd.set_option('display.max_rows', None)  # 行数を制限せず全て表示
+pd.set_option('display.max_rows', None)  # 行数を制限せず全て表示
 # pd.set_option('display.max_columns', None)  # 列数を制限せず全て表示
 
 
@@ -110,63 +110,93 @@ def read_sqlite(dbname_mst: str) -> pd.DataFrame:
 
 # NOTE ビジネスロジック
 def analysis(df_pre: pd.DataFrame) -> pd.DataFrame:
+    print(df_pre)
+    # print(df_pre.info())
     # ループ処理
-    for step in range(200):
+    for step in range(len(df_pre['step'])):
         # 処理日時分秒取得
         nowt = datetime.datetime.now()
-        df_1 = df_pre.query('obj_id==1 & step==0')
-        df_2 = df_pre.query('obj_id==2 & step==0')
-        barrier_range = df_1['barrier_range'].values[0] + df_2['barrier_range'].values[0]
+        # objectごとにフラグのあるステップ番号を抽出
+        df_1 = df_pre.query(f'obj_id==1 & current_flg==1')
+        df_2 = df_pre.query(f'obj_id==2 & current_flg==1')
+        if df_1.empty or df_2.empty:
+            break
+        df1_step = df_1['step'].values[0]
+        df1_step2 = df1_step + 1
+        df2_step = df_2['step'].values[0]
+        df2_step2 = df2_step + 1
+        print(f"df_1['step']: {df_1['step']}")
+        print(f"df_2['step']: {df_2['step']}")
+        # 干渉壁の和
+        sum_barrier_range = df_1['barrier_range'].values[0] + df_2['barrier_range'].values[0]
+        # object間の距離算出
         x_diff = df_2['x_position'].values[0] - df_1['x_position'].values[0]
-        # print(x_diff)
+        # print(f"x_diff:{x_diff}")
         y_diff = df_2['y_position'].values[0] - df_1['y_position'].values[0]
-        # print(y_diff)
+        # print(f"y_diff:{y_diff}")
         distance_obj = math.sqrt((x_diff)**2 + (y_diff)**2)
         # print(distance_obj)
-        condition_stp = ( df_pre['step'] == step )
-        condition_stp_nxt = ( df_pre['step'] == step +1 )
-        if barrier_range < distance_obj:
-            df_pre.loc[condition_stp, 'current_flg'] = 0
-            df_pre.loc[condition_stp_nxt, 'current_flg'] = 1
-            df_pre.loc[condition_stp_nxt, 'created_at'] = nowt
+        # 干渉しないので、df_1もdf_2も歩進する場合
+        # df_1とdf_2のフラグを持つステップが異なるので、それぞれ歩進しないとダメ
+        if sum_barrier_range < distance_obj:
+            condition = (df_pre['priority_no'] == 1) & (df_pre['step'] == df1_step) & (df_pre['current_flg'] == 1)
+            condition2 = (df_pre['priority_no'] == 1) & (df_pre['step'] == df1_step2) & (df_pre['current_flg'] == 0)
+            df_pre.loc[condition, 'current_flg'] = 0
+            df_pre.loc[condition2, 'current_flg'] = 1
+            df_pre.loc[condition2, 'created_at'] = nowt
+            condition = (df_pre['priority_no'] == 2) & (df_pre['step'] == df2_step) & (df_pre['current_flg'] == 1)
+            condition2 = (df_pre['priority_no'] == 2) & (df_pre['step'] == df2_step2) & (df_pre['current_flg'] == 0)
+            df_pre.loc[condition, 'current_flg'] = 0
+            df_pre.loc[condition2, 'current_flg'] = 1
+            df_pre.loc[condition2, 'created_at'] = nowt
         else:
-            step2 = step + 1
-            if step2 >= 100:
+            # どれでもいい。暫定でこれにしてる。
+            if df1_step2 >= 100:
                 break
             else:
+                # df_1を優先する場合
                 if df_1['priority_no'].values[0] < df_2['priority_no'].values[0]:
-                    df_1 = df_pre.query(f'obj_id==1 & step=={step2}')
+                    df_1 = df_pre.query(f"obj_id==1 & step=={df1_step2}")
                     x_diff = df_2['x_position'].values[0] - df_1['x_position'].values[0]
-                    # print(x_diff)
                     y_diff = df_2['y_position'].values[0] - df_1['y_position'].values[0]
-                    # print(y_diff)
                     distance_obj = math.sqrt((x_diff)**2 + (y_diff)**2)
-                    # print(distance_obj)
-                    if (barrier_range / distance_obj) < 2:
-                        condition_pno = ( df_pre['priority_no'] == min(df_1['priority_no'].values[0] , df_2['priority_no'].values[0]) )
-                        df_pre.loc[condition_pno & condition_stp, 'current_flg'] = 0
-                        df_pre.loc[condition_pno & condition_stp_nxt, 'current_flg'] = 1
-                        df_pre.loc[condition_pno & condition_stp_nxt, 'created_at'] = nowt
+                    # STEP[N+1]をチェックした結果、優先度1を歩進してOKだった場合
+                    if (sum_barrier_range / distance_obj) < 2:
+                        condition = (df_pre['priority_no'] == 1) & (df_pre['step'] == df1_step) & (df_pre['current_flg'] == 1)
+                        condition2 = (df_pre['priority_no'] == 1) & (df_pre['step'] == df1_step2) & (df_pre['current_flg'] == 0)
+                        df_pre.loc[condition, 'current_flg'] = 0
+                        df_pre.loc[condition2, 'current_flg'] = 1
+                        df_pre.loc[condition2, 'created_at'] = nowt
+                        # print(df_pre.loc[condition, 'current_flg'])
+                        # print(df_pre.loc[condition2, 'current_flg'])
+                        # print(df_pre.loc[condition2, 'created_at'])
+                    # STEP[N+1]をチェックした結果、優先度1を歩進してNGだった場合。衝突するので優先度2を歩進する。
                     else:
-                        condition_pno = ( df_pre['priority_no'] == max(df_1['priority_no'].values[0] , df_2['priority_no'].values[0]) )
-                        df_pre.loc[condition_pno & condition_stp, 'current_flg'] = 0
-                        df_pre.loc[condition_pno & condition_stp_nxt, 'current_flg'] = 1
-                        df_pre.loc[condition_pno & condition_stp_nxt, 'created_at'] = nowt
+                        condition = (df_pre['priority_no'] == 2) & (df_pre['step'] == df2_step) & (df_pre['current_flg'] == 1)
+                        condition2 = (df_pre['priority_no'] == 2) & (df_pre['step'] == df2_step2) & (df_pre['current_flg'] == 0)
+                        df_pre.loc[condition, 'current_flg'] = 0
+                        df_pre.loc[condition2, 'current_flg'] = 1
+                        df_pre.loc[condition2, 'created_at'] = nowt
+                # df_2を優先する場合
                 else:
-                    df_2 = df_pre.query(f'obj_id==2 & step=={step2}')
+                    df_2 = df_pre.query(f"obj_id==2 & step=={df2_step2}")
                     x_diff = df_2['x_position'].values[0] - df_1['x_position'].values[0]
                     y_diff = df_2['y_position'].values[0] - df_1['y_position'].values[0]
                     distance_obj = math.sqrt((x_diff)**2 + (y_diff)**2)
-                    if (barrier_range / distance_obj) < 2:
-                        condition_pno = ( df_pre['priority_no'] == min(df_1['priority_no'].values[0] , df_2['priority_no'].values[0]) )
-                        df_pre.loc[condition_pno & condition_stp, 'current_flg'] = 0
-                        df_pre.loc[condition_pno & condition_stp_nxt, 'current_flg'] = 1
-                        df_pre.loc[condition_pno & condition_stp_nxt, 'created_at'] = nowt
+                    # STEP[N+1]をチェックした結果、優先度2を歩進してOKだった場合
+                    if (sum_barrier_range / distance_obj) < 2:
+                        condition = (df_pre['priority_no'] == 2) & (df_pre['step'] == df2_step) & (df_pre['current_flg'] == 1)
+                        condition2 = (df_pre['priority_no'] == 2) & (df_pre['step'] == df2_step2) & (df_pre['current_flg'] == 0)
+                        df_pre.loc[condition, 'current_flg'] = 0
+                        df_pre.loc[condition2, 'current_flg'] = 1
+                        df_pre.loc[condition2, 'created_at'] = nowt
+                    # STEP[N+1]をチェックした結果、優先度2を歩進してNGだった場合。衝突するので優先度1を歩進する。
                     else:
-                        condition_pno = ( df_pre['priority_no'] == max(df_1['priority_no'].values[0] , df_2['priority_no'].values[0]) )
-                        df_pre.loc[condition_pno & condition_stp, 'current_flg'] = 0
-                        df_pre.loc[condition_pno & condition_stp_nxt, 'current_flg'] = 1
-                        df_pre.loc[condition_pno & condition_stp_nxt, 'created_at'] = nowt
+                        condition = (df_pre['priority_no'] == 1) & (df_pre['step'] == df1_step) & (df_pre['current_flg'] == 1)
+                        condition2 = (df_pre['priority_no'] == 1) & (df_pre['step'] == df1_step2) & (df_pre['current_flg'] == 0)
+                        df_pre.loc[condition, 'current_flg'] = 0
+                        df_pre.loc[condition2, 'current_flg'] = 1
+                        df_pre.loc[condition2, 'created_at'] = nowt
         time.sleep(0.1)
     return df_pre
 
@@ -196,6 +226,7 @@ def animation(df_trn):
     start_time = time.time()
     def update(frame):
         # 時間軸を比較するためにはクォーテーションを2重化する。loc[]は使わず、query()で絞る。
+        # ゆくゆくは汎用化したいが、まずは手作業で作る
         x1 = df_trn.query(f"obj_id==1 & created_at<='{frame}'").loc[:, 'x_position']
         y1 = df_trn.query(f"obj_id==1 & created_at<='{frame}'").loc[:, 'y_position']
         x2 = df_trn.query(f"obj_id==2 & created_at<='{frame}'").loc[:, 'x_position']
@@ -243,7 +274,7 @@ if __name__ == "__main__":
     # 本番処理
     # NOTE ビジネスロジック。
     df_trn = analysis(df_pre)
-    # print(df_trn)
+    print(df_trn)
     # NOTE アニメーション表示。
     animation(df_trn)
     # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
