@@ -9,6 +9,7 @@ import os
 import pandas as pd
 import sqlite3
 import time
+from pyparsing import dbl_quoted_string
 import uvicorn
 
 
@@ -37,24 +38,31 @@ class DatabaseTransaction:
             self.conn.close()
 
 
-# 実績書き込み用 テーブル定義＆作成SQL
-def create_database_transaction(dbname_trn: str) -> None:
-    with DatabaseTransaction(dbname_trn) as cursor:
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS trn_obj_trajectory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT not null UNIQUE,
-                obj_id INTEGER not null,
-                obj_name TEXT not null,
-                priority_no INTEGER not null,
-                group_no INTEGER not null,
-                barrier_range REAL not null,
-                step INTEGER not null,
-                x_position  REAL not null,
-                y_position  REAL not null,
-                present_location INTEGER not null
-            )
-        ''')
+# 実績書き込み用DB
+def create_database_transaction(df: pd.DataFrame, dbname_trn: str) -> None:
+    # NOTE pandas使うパターン
+    # シミュレート結果データベース作成
+        file_sqlite3 = f"./db/{dbname_trn}"
+        conn = sqlite3.connect(file_sqlite3)
+        df.to_sql(dbname_trn, conn, if_exists='append', index=True)
+        conn.close()
+    # NOTE SQL書くパターン
+    # with DatabaseTransaction(dbname_trn) as cursor:
+    #     cursor.execute('''
+    #         CREATE TABLE IF NOT EXISTS trn_obj_trajectory (
+    #             id INTEGER PRIMARY KEY AUTOINCREMENT,
+    #             obj_id INTEGER not null,
+    #             obj_name TEXT not null,
+    #             priority_no INTEGER not null,
+    #             group_no INTEGER not null,
+    #             barrier_range REAL not null,
+    #             step INTEGER not null,
+    #             x_position  REAL not null,
+    #             y_position  REAL not null,
+    #             created_at TEXT not null UNIQUE,
+    #             present_location INTEGER not null
+    #         )
+    #     ''')
 
 
 # マスタDBから情報取得
@@ -103,15 +111,13 @@ def read_sqlite(dbname_mst: str) -> pd.DataFrame:
     # df_pre.query("step==0").loc[:, 'created_at'] = datetime.datetime.now()
     df_pre.loc[condition, 'current_flg'] = 1
     df_pre.loc[condition, 'created_at'] = datetime.datetime.now()
-    # print(df_pre)
-    # print(df_pre.info())
+    print(df_pre)
+    print(df_pre.info())
     return df_pre
 
 
 # NOTE ビジネスロジック
 def analysis(df_pre: pd.DataFrame) -> pd.DataFrame:
-    print(df_pre)
-    # print(df_pre.info())
     # ループ処理
     for step in range(len(df_pre['step'])):
         # 処理日時分秒取得
@@ -125,8 +131,7 @@ def analysis(df_pre: pd.DataFrame) -> pd.DataFrame:
         df1_step2 = df1_step + 1
         df2_step = df_2['step'].values[0]
         df2_step2 = df2_step + 1
-        print(f"df_1['step']: {df_1['step']}")
-        print(f"df_2['step']: {df_2['step']}")
+        print(f"df_1['step']: {df_1['step'].values[0]} || df_2['step']: {df_2['step'].values[0]}")
         # 干渉壁の和
         sum_barrier_range = df_1['barrier_range'].values[0] + df_2['barrier_range'].values[0]
         # object間の距離算出
@@ -257,8 +262,6 @@ if __name__ == "__main__":
     if os.path.isfile(f"./db/{name_trn_db}"):
         os.remove(f"./db/{name_trn_db}")
     else:pass
-    # NOTE 実績DB新規作成
-    create_database_transaction(name_trn_db)
     # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
 
 
@@ -271,10 +274,20 @@ if __name__ == "__main__":
 
 
     # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-    # 本番処理
+    # 本番処理1
     # NOTE ビジネスロジック。
     df_trn = analysis(df_pre)
     print(df_trn)
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+    # 本番処理2
+    # NOTE 実績DB新規作成
+    create_database_transaction(df_trn, name_trn_db)
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+
+    # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+    # 本番処理3
     # NOTE アニメーション表示。
     animation(df_trn)
     # ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
